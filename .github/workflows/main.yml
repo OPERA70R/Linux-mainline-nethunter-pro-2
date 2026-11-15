@@ -48,7 +48,7 @@ jobs:
       - name: Compile Kernel and DTBs
         run: |
           # Build the compressed kernel image and device tree blobs
-          make -j$(nproc) Image.gz dtbs
+          make -j$(nproc) Image.gz
 
       - name: Upload Kernel Image (Image.gz)
         uses: actions/upload-artifact@v4
@@ -57,12 +57,12 @@ jobs:
           path: arch/arm64/boot/Image.gz
           if-no-files-found: error
 
-      - name: Upload Device Tree Blobs (DTBs)
-        uses: actions/upload-artifact@v4
-        with:
-          name: sm8250-dtbs
-          path: arch/arm64/boot/dts/qcom/sm8250*.dtb
-          if-no-files-found: error
+      #- name: Upload Device Tree Blobs (DTBs)
+        #uses: actions/upload-artifact@v4
+        #with:
+         # name: sm8250-dtbs
+          #path: arch/arm64/boot/dts/qcom/sm8250*.dtb
+          #if-no-files-found: error
 
   commit-builds:
     needs: build-kernel
