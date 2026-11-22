@@ -1,4 +1,5 @@
-name: Build Mainline Kernel (sm8250)
+# SPDX-License-Identifier: GPL-2.0-only
+name: Build Mainline Kernel (sm8250/r8q)
 
 on:
   push:
@@ -14,7 +15,7 @@ permissions:
 
 jobs:
   build-kernel:
-    name: Build sm8250 Kernel
+    name: Build Galaxy S20 FE (r8q) kernel
     runs-on: ubuntu-latest
     env:
       ARCH: arm64
@@ -30,39 +31,49 @@ jobs:
           sudo apt-get install -y build-essential bc bison flex libssl-dev \
             libelf-dev gcc-aarch64-linux-gnu
 
-      - name: Configure Kernel
+      - name: Configure kernel for Galaxy S20 FE (r8q)
+        shell: bash
         run: |
-          # 1. Generate the base configuration
-          make defconfig r8q.config
-          
-          # 2. Merge the sm8250 specific configuration fragment
-          # NOTE: Adjust the path below if sm8250.config is located somewhere else in your repo
-          #/scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/sm8250.config
-          #/scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/r8q.config
-          
-          # 3. Validate and apply the merged configuration
-          # The device config references a machine-local initramfs unavailable in CI.
-          #./scripts/config --file .config --set-str INITRAMFS_SOURCE ""
-          #make olddefconfig
+          set -euo pipefail
 
-      - name: Compile Kernel and DTBs
-        run: |
-          # Build the compressed kernel image and device tree blobs
-          make -j$(nproc) Image.gz
+          config_dir=arch/arm64/configs
+          for fragment in \
+            "$config_dir/sm8250.config" \
+            "$config_dir/samsung_defconfig" \
+            "$config_dir/r8q.config"; do
+            test -s "$fragment" || { echo "Missing config fragment: $fragment" >&2; exit 1; }
+          done
 
-      - name: Upload Kernel Image (Image.gz)
+          # Start from the complete arm64 baseline. Apply SoC and Samsung
+          # settings, then r8q last so device-specific values win conflicts.
+          make ARCH="$ARCH" defconfig
+          ./scripts/kconfig/merge_config.sh -m .config \
+            "$config_dir/sm8250.config" \
+            "$config_dir/samsung_defconfig" \
+            "$config_dir/r8q.config"
+          make ARCH="$ARCH" olddefconfig
+
+          grep -qx 'CONFIG_LOCALVERSION="-r8q-nethunter"' .config || {
+            echo "Merged config did not retain the r8q local version" >&2
+            exit 1
+          }
+
+      - name: Compile kernel and DTBs
+        run: make ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" -j"$(nproc)" Image.gz dtbs
+
+      - name: Upload kernel image
         uses: actions/upload-artifact@v4
         with:
           name: sm8250-Image.gz
           path: arch/arm64/boot/Image.gz
           if-no-files-found: error
 
-      #- name: Upload Device Tree Blobs (DTBs)
-        #uses: actions/upload-artifact@v4
-        #with:
-         # name: sm8250-dtbs
-          #path: arch/arm64/boot/dts/qcom/sm8250*.dtb
-          #if-no-files-found: error
+      - name: Upload device tree blobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm8250-dtbs
+          path: arch/arm64/boot/dts/qcom/sm8250*.dtb
+          if-no-files-found: error
 
   commit-builds:
     needs: build-kernel
