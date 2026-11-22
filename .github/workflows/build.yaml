@@ -1,4 +1,5 @@
-name: Build Mainline Kernel and modules (sm8250)
+# SPDX-License-Identifier: GPL-2.0-only
+name: Build Mainline Kernel and modules (sm8250/r8q)
 
 on:
   push:
@@ -14,7 +15,7 @@ permissions:
 
 jobs:
   build-kernel:
-    name: Build sm8250 Kernel
+    name: Build sm8250 Galaxy S20 FE (r8q) kernel and modules
     runs-on: ubuntu-latest
     env:
       ARCH: arm64
@@ -30,51 +31,72 @@ jobs:
           sudo apt-get install -y build-essential bc bison flex libssl-dev \
             libelf-dev gcc-aarch64-linux-gnu cpio kmod
 
-      - name: Configure Kernel
+      - name: Configure kernel for Galaxy S20 FE (r8q)
+        shell: bash
         run: |
-          make defconfig
-          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/sm8250.config
-          make olddefconfig
+          set -euo pipefail
 
-      - name: Compile Kernel, DTBs, and Modules
-        run: |
-          make -j$(nproc) Image.gz dtbs modules
+          config_dir=arch/arm64/configs
+          for fragment in \
+            "$config_dir/sm8250.config" \
+            "$config_dir/samsung_defconfig" \
+            "$config_dir/r8q.config"; do
+            test -s "$fragment" || { echo "Missing config fragment: $fragment" >&2; exit 1; }
+          done
+
+          # Start from the repository's complete arm64 baseline. Apply the SoC
+          # and Samsung fragments, then the r8q device fragment last so its
+          # device-specific settings (including LOCALVERSION) take precedence.
+          make ARCH="$ARCH" defconfig
+          ./scripts/kconfig/merge_config.sh -m .config \
+            "$config_dir/sm8250.config" \
+            "$config_dir/samsung_defconfig" \
+            "$config_dir/r8q.config"
+          make ARCH="$ARCH" olddefconfig
+
+          grep -qx 'CONFIG_LOCALVERSION="-r8q-nethunter"' .config || {
+            echo "Merged config did not retain the r8q local version" >&2
+            exit 1
+          }
+
+      - name: Compile kernel, DTBs, and modules
+        run: make ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" -j"$(nproc)" Image.gz dtbs modules
 
       - name: Build initramfs with kernel modules
+        shell: bash
         run: |
           set -euo pipefail
 
           staging_dir="$PWD/initramfs_staging"
-          kernel_release="$(make -s kernelrelease)"
+          kernel_release="$(make -s ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" kernelrelease)"
           rm -rf "$staging_dir"
           mkdir -p "$staging_dir"
 
-          make modules_install INSTALL_MOD_PATH="$staging_dir"
+          make ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" modules_install INSTALL_MOD_PATH="$staging_dir"
 
-          # Remove build-tree links; keep the installed modules and depmod metadata.
+          # Remove build-tree links; keep installed modules and depmod metadata.
           rm -f "$staging_dir/lib/modules/$kernel_release/build" \
                 "$staging_dir/lib/modules/$kernel_release/source"
 
           test -n "$(find "$staging_dir/lib/modules/$kernel_release" -type f -name '*.ko*' -print -quit)"
 
-          # Pack the staged /lib/modules tree into a compressed newc initramfs.
           (cd "$staging_dir" && find . -print0 | cpio --null --quiet -o -H newc) | gzip -9 > initramfs.img
 
-      - name: Upload Kernel Image (Image.gz)
+      - name: Upload kernel image
         uses: actions/upload-artifact@v4
         with:
           name: sm8250-Image.gz
           path: arch/arm64/boot/Image.gz
           if-no-files-found: error
 
-      - name: Upload Device Tree Blobs (DTBs)
+      - name: Upload device tree blobs
         uses: actions/upload-artifact@v4
         with:
           name: sm8250-dtbs
           path: arch/arm64/boot/dts/qcom/sm8250*.dtb
           if-no-files-found: error
 
-      - name: Upload Initramfs (initramfs.img)
+      - name: Upload initramfs
         uses: actions/upload-artifact@v4
         with:
           name: sm8250-initramfs
